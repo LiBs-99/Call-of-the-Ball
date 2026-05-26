@@ -1,0 +1,738 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gravity Flip – Unlockable Skins</title>
+    <style>
+        body {
+            margin: 0;
+            background: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: sans-serif;
+        }
+        canvas {
+            border: 2px solid white;
+            display: block;
+            background: #111;
+            touch-action: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas" width="800" height="500"></canvas>
+
+    <script>
+        (function() {
+            const canvas = document.getElementById('gameCanvas');
+            const ctx = canvas.getContext('2d');
+            const width = canvas.width;
+            const height = canvas.height;
+
+            // ---------- Game State ----------
+            let gameState = 'menu';          // 'menu', 'playing', 'levelComplete', 'timeUp'
+            let currentLevel = -1;          // 0:easy, 1:medium, 2:hard
+            let skinIndex = 0;              // currently equipped skin
+            let deathCount = 0;
+            let levelTimeLeft = 60;         // seconds
+            let lastTimestamp = 0;
+
+            // ---------- Unlock Progress ----------
+            // Skins: 0-default(unlocked), 1-glass(easy), 2-star(medium), 3-soccer(hard)
+            let unlockedSkins = [true, false, false, false];
+
+            // ---------- Ball ----------
+            const ball = {
+                x: 120,
+                y: height / 2,
+                radius: 20,
+                vx: 0,
+                vy: 0,
+                gravityDir: 1,      // 1 = down, -1 = up
+                grounded: false,
+                angle: 0,           // rotation for rolling effect
+                canFlip: true       // limits one flip per air time
+            };
+
+            const gravityStrength = 0.6;
+            const maxFallSpeed = 12;
+
+            // ---------- World & Camera ----------
+            let worldOffset = 0;
+            let levelLength = 4000;
+            let finishX = 3800;
+            let platforms = [];
+            let obstacles = [];
+
+            // ---------- Level Definitions ----------
+            // Each entry: { type: 'platform'|'obstacle', x, y, w, h }
+            // No ground platform – bottom screen edge kills you.
+            const levelData = [
+                // ----- Easy (many safe platforms) -----
+                [
+                    { type: 'platform', x: 0, y: 400, w: 180, h: 15 },
+                    { type: 'platform', x: 250, y: 320, w: 150, h: 15 },
+                    { type: 'platform', x: 450, y: 240, w: 150, h: 15 },
+                    { type: 'platform', x: 700, y: 340, w: 180, h: 15 },
+                    { type: 'platform', x: 950, y: 260, w: 130, h: 15 },
+                    { type: 'platform', x: 1150, y: 180, w: 150, h: 15 },
+                    { type: 'platform', x: 1400, y: 300, w: 200, h: 15 },
+                    { type: 'platform', x: 1650, y: 220, w: 150, h: 15 },
+                    { type: 'platform', x: 1850, y: 380, w: 200, h: 15 },
+                    { type: 'platform', x: 2100, y: 280, w: 150, h: 15 },
+                    { type: 'platform', x: 2350, y: 180, w: 180, h: 15 },
+                    { type: 'platform', x: 2600, y: 320, w: 200, h: 15 },
+                    { type: 'platform', x: 2900, y: 240, w: 200, h: 15 },
+                    { type: 'platform', x: 3200, y: 350, w: 200, h: 15 },
+                    // obstacles (red)
+                    { type: 'obstacle', x: 200, y: 350, w: 25, h: 50 },
+                    { type: 'obstacle', x: 350, y: 270, w: 25, h: 50 },
+                    { type: 'obstacle', x: 550, y: 190, w: 25, h: 50 },
+                    { type: 'obstacle', x: 800, y: 290, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1050, y: 210, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1300, y: 130, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1500, y: 250, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1750, y: 170, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1950, y: 330, w: 25, h: 50 },
+                    { type: 'obstacle', x: 2200, y: 230, w: 25, h: 50 },
+                ],
+                // ----- Medium (more platforms, trickier gaps) -----
+                [
+                    { type: 'platform', x: 0, y: 380, w: 160, h: 15 },
+                    { type: 'platform', x: 220, y: 300, w: 140, h: 15 },
+                    { type: 'platform', x: 400, y: 220, w: 140, h: 15 },
+                    { type: 'platform', x: 600, y: 340, w: 160, h: 15 },
+                    { type: 'platform', x: 820, y: 260, w: 120, h: 15 },
+                    { type: 'platform', x: 1000, y: 180, w: 130, h: 15 },
+                    { type: 'platform', x: 1200, y: 300, w: 180, h: 15 },
+                    { type: 'platform', x: 1400, y: 220, w: 120, h: 15 },
+                    { type: 'platform', x: 1600, y: 380, w: 180, h: 15 },
+                    { type: 'platform', x: 1850, y: 280, w: 150, h: 15 },
+                    { type: 'platform', x: 2050, y: 180, w: 150, h: 15 },
+                    { type: 'platform', x: 2300, y: 300, w: 200, h: 15 },
+                    { type: 'platform', x: 2550, y: 220, w: 150, h: 15 },
+                    { type: 'platform', x: 2800, y: 350, w: 200, h: 15 },
+                    { type: 'platform', x: 3100, y: 260, w: 180, h: 15 },
+                    // obstacles
+                    { type: 'obstacle', x: 150, y: 330, w: 25, h: 50 },
+                    { type: 'obstacle', x: 320, y: 250, w: 25, h: 50 },
+                    { type: 'obstacle', x: 500, y: 170, w: 25, h: 50 },
+                    { type: 'obstacle', x: 700, y: 290, w: 25, h: 50 },
+                    { type: 'obstacle', x: 900, y: 210, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1100, y: 130, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1300, y: 250, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1500, y: 170, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1700, y: 330, w: 25, h: 50 },
+                    { type: 'obstacle', x: 1950, y: 230, w: 25, h: 50 },
+                    { type: 'obstacle', x: 2150, y: 130, w: 25, h: 50 },
+                    { type: 'obstacle', x: 2400, y: 250, w: 25, h: 50 },
+                    { type: 'obstacle', x: 2650, y: 170, w: 25, h: 50 },
+                    { type: 'obstacle', x: 2900, y: 300, w: 25, h: 50 },
+                ],
+                // ----- Hard (narrow platforms, fast, tight obstacles) -----
+                [
+                    { type: 'platform', x: 0, y: 390, w: 130, h: 15 },
+                    { type: 'platform', x: 180, y: 310, w: 100, h: 15 },
+                    { type: 'platform', x: 340, y: 230, w: 100, h: 15 },
+                    { type: 'platform', x: 500, y: 350, w: 120, h: 15 },
+                    { type: 'platform', x: 680, y: 260, w: 100, h: 15 },
+                    { type: 'platform', x: 830, y: 180, w: 100, h: 15 },
+                    { type: 'platform', x: 980, y: 300, w: 140, h: 15 },
+                    { type: 'platform', x: 1160, y: 220, w: 100, h: 15 },
+                    { type: 'platform', x: 1300, y: 380, w: 140, h: 15 },
+                    { type: 'platform', x: 1500, y: 280, w: 120, h: 15 },
+                    { type: 'platform', x: 1680, y: 190, w: 100, h: 15 },
+                    { type: 'platform', x: 1830, y: 330, w: 150, h: 15 },
+                    { type: 'platform', x: 2050, y: 240, w: 120, h: 15 },
+                    { type: 'platform', x: 2220, y: 150, w: 100, h: 15 },
+                    { type: 'platform', x: 2400, y: 300, w: 160, h: 15 },
+                    { type: 'platform', x: 2620, y: 220, w: 120, h: 15 },
+                    { type: 'platform', x: 2800, y: 350, w: 150, h: 15 },
+                    { type: 'platform', x: 3050, y: 260, w: 140, h: 15 },
+                    // dense obstacles
+                    { type: 'obstacle', x: 120, y: 340, w: 22, h: 50 },
+                    { type: 'obstacle', x: 250, y: 260, w: 22, h: 50 },
+                    { type: 'obstacle', x: 400, y: 180, w: 22, h: 50 },
+                    { type: 'obstacle', x: 560, y: 300, w: 22, h: 50 },
+                    { type: 'obstacle', x: 720, y: 210, w: 22, h: 50 },
+                    { type: 'obstacle', x: 880, y: 130, w: 22, h: 50 },
+                    { type: 'obstacle', x: 1040, y: 250, w: 22, h: 50 },
+                    { type: 'obstacle', x: 1200, y: 170, w: 22, h: 50 },
+                    { type: 'obstacle', x: 1370, y: 330, w: 22, h: 50 },
+                    { type: 'obstacle', x: 1540, y: 230, w: 22, h: 50 },
+                    { type: 'obstacle', x: 1720, y: 140, w: 22, h: 50 },
+                    { type: 'obstacle', x: 1900, y: 280, w: 22, h: 50 },
+                    { type: 'obstacle', x: 2100, y: 190, w: 22, h: 50 },
+                    { type: 'obstacle', x: 2270, y: 100, w: 22, h: 50 },
+                    { type: 'obstacle', x: 2450, y: 250, w: 22, h: 50 },
+                    { type: 'obstacle', x: 2680, y: 170, w: 22, h: 50 },
+                    { type: 'obstacle', x: 2850, y: 300, w: 22, h: 50 },
+                    { type: 'obstacle', x: 3100, y: 210, w: 22, h: 50 },
+                ]
+            ];
+
+            // ---------- Input Handling ----------
+            const keys = {};
+            let spacePressed = false;
+
+            window.addEventListener('keydown', (e) => {
+                keys[e.code] = true;
+                if (e.code === 'Space') {
+                    e.preventDefault();
+                    if (!spacePressed) {
+                        attemptFlip();
+                        spacePressed = true;
+                    }
+                }
+            });
+            window.addEventListener('keyup', (e) => {
+                keys[e.code] = false;
+                if (e.code === 'Space') spacePressed = false;
+            });
+
+            canvas.addEventListener('click', (e) => {
+                if (gameState === 'menu') {
+                    handleMenuClick(e.offsetX, e.offsetY);
+                } else {
+                    attemptFlip();
+                }
+            });
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                const touchX = e.touches[0].clientX - rect.left;
+                const touchY = e.touches[0].clientY - rect.top;
+                if (gameState === 'menu') {
+                    handleMenuClick(touchX, touchY);
+                } else {
+                    attemptFlip();
+                }
+            });
+
+            function attemptFlip() {
+                if (gameState !== 'playing') return;
+                if (!ball.canFlip) return;   // only one flip per air time
+                ball.gravityDir *= -1;
+                ball.vy = ball.gravityDir * 4;
+                ball.canFlip = false;
+            }
+
+            // ---------- Level Loading ----------
+            function loadLevel(levelIndex) {
+                currentLevel = levelIndex;
+                const data = levelData[levelIndex];
+                platforms = [];
+                obstacles = [];
+                data.forEach(obj => {
+                    if (obj.type === 'platform') platforms.push({...obj});
+                    else obstacles.push({...obj});
+                });
+
+                // Difficulty settings
+                if (levelIndex === 0) {         // easy
+                    ball.vx = 3;
+                    levelLength = 3500;
+                } else if (levelIndex === 1) {  // medium
+                    ball.vx = 5;
+                    levelLength = 3500;
+                } else {                        // hard
+                    ball.vx = 8;
+                    levelLength = 3500;
+                }
+                finishX = levelLength - 200;
+
+                ball.x = 120;
+                ball.y = height / 2;
+                ball.vy = 0;
+                ball.gravityDir = 1;
+                ball.grounded = false;
+                ball.canFlip = true;
+                ball.angle = 0;
+                worldOffset = 0;
+                deathCount = 0;
+                levelTimeLeft = 60;
+                gameState = 'playing';
+            }
+
+            // ---------- Collision & Physics ----------
+            function checkCollisions() {
+                ball.grounded = false;
+                for (let p of platforms) {
+                    const platLeft = p.x - worldOffset;
+                    const platRight = platLeft + p.w;
+                    const platTop = p.y;
+                    const platBottom = p.y + p.h;
+
+                    const closestX = Math.max(platLeft, Math.min(ball.x, platRight));
+                    const closestY = Math.max(platTop, Math.min(ball.y, platBottom));
+                    const dx = ball.x - closestX;
+                    const dy = ball.y - closestY;
+                    if (dx * dx + dy * dy < ball.radius * ball.radius) {
+                        if (ball.gravityDir === 1) {
+                            if (ball.vy >= 0 && ball.y < platTop) {
+                                ball.y = platTop - ball.radius;
+                                ball.vy = 0;
+                                ball.grounded = true;
+                                ball.canFlip = true;   // landed, can flip again
+                            }
+                        } else {
+                            if (ball.vy <= 0 && ball.y > platBottom) {
+                                ball.y = platBottom + ball.radius;
+                                ball.vy = 0;
+                                ball.grounded = true;
+                                ball.canFlip = true;
+                            }
+                        }
+                    }
+                }
+
+                // Obstacle collision = death
+                for (let o of obstacles) {
+                    const obsLeft = o.x - worldOffset;
+                    const obsRight = obsLeft + o.w;
+                    const obsTop = o.y;
+                    const obsBottom = o.y + o.h;
+                    const closestX = Math.max(obsLeft, Math.min(ball.x, obsRight));
+                    const closestY = Math.max(obsTop, Math.min(ball.y, obsBottom));
+                    const dx = ball.x - closestX;
+                    const dy = ball.y - closestY;
+                    if (dx * dx + dy * dy < ball.radius * ball.radius) {
+                        deathCount++;
+                        resetBall();
+                        break;
+                    }
+                }
+
+                // Bottom edge death
+                if (ball.y + ball.radius > height) {
+                    deathCount++;
+                    resetBall();
+                }
+            }
+
+            function resetBall() {
+                ball.x = 120;
+                ball.y = height / 2;
+                ball.vy = 0;
+                ball.gravityDir = 1;
+                ball.grounded = false;
+                ball.canFlip = true;
+                ball.angle = 0;
+                worldOffset = 0;
+            }
+
+            // ---------- Update Loop ----------
+            function update(deltaTime) {
+                if (gameState !== 'playing') return;
+
+                // Timer
+                levelTimeLeft -= deltaTime;
+                if (levelTimeLeft <= 0) {
+                    levelTimeLeft = 0;
+                    gameState = 'timeUp';
+                    return;
+                }
+
+                // Horizontal movement (also allow player input for extra control)
+                if (keys['ArrowLeft'] || keys['KeyA']) ball.x -= 3;
+                if (keys['ArrowRight'] || keys['KeyD']) ball.x += 3;
+                ball.x += ball.vx;   // auto scroll
+                if (ball.x < 0) ball.x = 0;
+                worldOffset = ball.x - 120;
+
+                // Gravity
+                ball.vy += gravityStrength * ball.gravityDir;
+                if (Math.abs(ball.vy) > maxFallSpeed) {
+                    ball.vy = Math.sign(ball.vy) * maxFallSpeed;
+                }
+                ball.y += ball.vy;
+
+                // Top edge: stop at ceiling (no death, just bump)
+                if (ball.y - ball.radius < 0) {
+                    ball.y = ball.radius;
+                    ball.vy = 0;
+                }
+
+                // Ball rolling – angle changes based on horizontal movement
+                ball.angle += ball.vx / ball.radius * (ball.gravityDir); // simple rotation
+
+                checkCollisions();
+
+                // Check level completion
+                if (ball.x >= finishX) {
+                    gameState = 'levelComplete';
+                    // Unlock corresponding skin
+                    if (currentLevel === 0 && !unlockedSkins[1]) unlockedSkins[1] = true;
+                    if (currentLevel === 1 && !unlockedSkins[2]) unlockedSkins[2] = true;
+                    if (currentLevel === 2 && !unlockedSkins[3]) unlockedSkins[3] = true;
+                }
+            }
+
+            // ---------- Drawing Functions ----------
+            function drawPlatforms() {
+                ctx.fillStyle = '#3498db';
+                for (let p of platforms) {
+                    const x = p.x - worldOffset;
+                    if (x + p.w < 0 || x > width) continue;
+                    ctx.fillRect(x, p.y, p.w, p.h);
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(x, p.y, p.w, p.h);
+                }
+            }
+
+            function drawObstacles() {
+                ctx.fillStyle = '#e74c3c';
+                for (let o of obstacles) {
+                    const x = o.x - worldOffset;
+                    if (x + o.w < 0 || x > width) continue;
+                    ctx.fillRect(x, o.y, o.w, o.h);
+                    ctx.strokeStyle = '#fff';
+                    ctx.strokeRect(x, o.y, o.w, o.h);
+                }
+            }
+
+            function drawFinishFlag() {
+                const flagX = finishX - worldOffset;
+                if (flagX < -50 || flagX > width + 50) return;
+                ctx.fillStyle = '#f1c40f';
+                ctx.fillRect(flagX, 100, 10, 80);
+                ctx.beginPath();
+                ctx.moveTo(flagX, 100);
+                ctx.lineTo(flagX + 30, 120);
+                ctx.lineTo(flagX, 140);
+                ctx.fillStyle = '#2ecc71';
+                ctx.fill();
+            }
+
+            // ---------- Ball Skins (with rotation) ----------
+            function drawBall() {
+                ctx.save();
+                ctx.translate(ball.x, ball.y);
+                ctx.rotate(ball.angle);
+                switch(skinIndex) {
+                    case 0: drawDefaultBall(); break;
+                    case 1: drawGlassBall(); break;
+                    case 2: drawStarBall(); break;
+                    case 3: drawSoccerBall(); break;
+                }
+                ctx.restore();
+            }
+
+            function drawDefaultBall() {
+                const r = ball.radius;
+                ctx.beginPath();
+                ctx.arc(0, 0, r, 0, Math.PI*2);
+                ctx.fillStyle = '#f39c12';
+                ctx.fill();
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = '#2c3e50';
+                ctx.stroke();
+                // rolling indicator: white line from center to edge
+                ctx.beginPath();
+                ctx.moveTo(0, 0);
+                ctx.lineTo(r * 0.8, 0);
+                ctx.strokeStyle = 'white';
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }
+
+            function drawGlassBall() {
+                const r = ball.radius;
+                const gradient = ctx.createRadialGradient(-r*0.3, -r*0.3, r*0.1, 0, 0, r);
+                gradient.addColorStop(0, 'rgba(255,255,255,0.9)');
+                gradient.addColorStop(0.5, 'rgba(100,200,255,0.6)');
+                gradient.addColorStop(1, 'rgba(0,100,200,0.8)');
+                ctx.beginPath();
+                ctx.arc(0, 0, r, 0, Math.PI*2);
+                ctx.fillStyle = gradient;
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+                ctx.stroke();
+                // shine
+                ctx.beginPath();
+                ctx.arc(-r*0.25, -r*0.25, r*0.2, 0, Math.PI*2);
+                ctx.fillStyle = 'white';
+                ctx.fill();
+            }
+
+            function drawStarBall() {
+                const r = ball.radius;
+                const spikes = 5;
+                const outerR = r;
+                const innerR = r * 0.45;
+                let rot = Math.PI / 2 * 3;
+                const step = Math.PI / spikes;
+                ctx.beginPath();
+                for (let i = 0; i < spikes; i++) {
+                    let ox = Math.cos(rot) * outerR;
+                    let oy = Math.sin(rot) * outerR;
+                    ctx.lineTo(ox, oy);
+                    rot += step;
+                    let ix = Math.cos(rot) * innerR;
+                    let iy = Math.sin(rot) * innerR;
+                    ctx.lineTo(ix, iy);
+                    rot += step;
+                }
+                ctx.closePath();
+                ctx.fillStyle = '#f1c40f';
+                ctx.fill();
+                ctx.lineWidth = 2;
+                ctx.strokeStyle = '#2c3e50';
+                ctx.stroke();
+            }
+
+            function drawSoccerBall() {
+                const r = ball.radius;
+                ctx.beginPath();
+                ctx.arc(0, 0, r, 0, Math.PI*2);
+                ctx.fillStyle = 'white';
+                ctx.fill();
+                ctx.strokeStyle = 'black';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+
+                drawPentagon(0, 0, r * 0.4);
+                const pentPoints = getPentagonPoints(0, 0, r * 0.4);
+                pentPoints.forEach(pt => {
+                    const angle = Math.atan2(pt.y, pt.x);
+                    const edgeX = r * Math.cos(angle);
+                    const edgeY = r * Math.sin(angle);
+                    ctx.beginPath();
+                    ctx.moveTo(pt.x, pt.y);
+                    ctx.lineTo(edgeX, edgeY);
+                    ctx.strokeStyle = 'black';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                });
+            }
+
+            function drawPentagon(cx, cy, radius) {
+                const points = getPentagonPoints(cx, cy, radius);
+                ctx.beginPath();
+                ctx.moveTo(points[0].x, points[0].y);
+                for (let i = 1; i < points.length; i++) {
+                    ctx.lineTo(points[i].x, points[i].y);
+                }
+                ctx.closePath();
+                ctx.fillStyle = 'black';
+                ctx.fill();
+            }
+
+            function getPentagonPoints(cx, cy, radius) {
+                const points = [];
+                for (let i = 0; i < 5; i++) {
+                    const angle = (i * 2 * Math.PI / 5) - Math.PI / 2;
+                    points.push({
+                        x: cx + radius * Math.cos(angle),
+                        y: cy + radius * Math.sin(angle)
+                    });
+                }
+                return points;
+            }
+
+            // ---------- UI Drawing ----------
+            function drawTimer() {
+                if (gameState !== 'playing') return;
+                ctx.font = 'bold 24px sans-serif';
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'right';
+                ctx.fillText(`Time: ${Math.ceil(levelTimeLeft)}s`, width - 20, 40);
+            }
+
+            function drawDeaths() {
+                if (gameState !== 'playing') return;
+                ctx.font = '20px sans-serif';
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'left';
+                ctx.fillText(`Deaths: ${deathCount}`, 20, 40);
+            }
+
+            function drawMenu() {
+                ctx.fillStyle = 'rgba(0,0,0,0.85)';
+                ctx.fillRect(0, 0, width, height);
+
+                ctx.font = 'bold 40px sans-serif';
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'center';
+                ctx.fillText('GRAVITY FLIP', width/2, 80);
+
+                // Level buttons
+                const levelNames = ['Easy', 'Medium', 'Hard'];
+                const buttonY = 150;
+                for (let i = 0; i < 3; i++) {
+                    const bx = 250 + i * 200;
+                    const by = buttonY;
+                    const bw = 160, bh = 50;
+                    ctx.fillStyle = '#4a4';
+                    ctx.fillRect(bx, by, bw, bh);
+                    ctx.strokeStyle = '#fff';
+                    ctx.lineWidth = 2;
+                    ctx.strokeRect(bx, by, bw, bh);
+                    ctx.font = '24px sans-serif';
+                    ctx.fillStyle = '#fff';
+                    ctx.textAlign = 'center';
+                    ctx.fillText(levelNames[i], bx + bw/2, by + 35);
+                }
+
+                // Skin selection & lock status
+                const skinNames = ['Default', 'Glass', 'Star', 'Soccer'];
+                const skinStartX = 120, skinY = 260, skinW = 130, skinH = 60;
+                for (let i = 0; i < 4; i++) {
+                    const sx = skinStartX + i * 160;
+                    // Draw lock/unlock
+                    ctx.fillStyle = unlockedSkins[i] ? (i === skinIndex ? '#2a2' : '#666') : '#444';
+                    ctx.fillRect(sx, skinY, skinW, skinH);
+                    ctx.strokeStyle = '#fff';
+                    ctx.strokeRect(sx, skinY, skinW, skinH);
+                    ctx.font = '16px sans-serif';
+                    ctx.fillStyle = '#fff';
+                    ctx.textAlign = 'center';
+                    if (unlockedSkins[i]) {
+                        ctx.fillText(skinNames[i], sx + skinW/2, skinY + 30);
+                        if (i === skinIndex) {
+                            ctx.fillText('(Equipped)', sx + skinW/2, skinY + 50);
+                        }
+                    } else {
+                        ctx.fillText('🔒', sx + skinW/2, skinY + 30);
+                        ctx.fillText(skinNames[i], sx + skinW/2, skinY + 50);
+                    }
+                }
+
+                ctx.font = '20px sans-serif';
+                ctx.fillStyle = '#ccc';
+                ctx.textAlign = 'center';
+                ctx.fillText('Beat Easy → Unlock Glass', width/2, 380);
+                ctx.fillText('Beat Medium → Unlock Star', width/2, 410);
+                ctx.fillText('Beat Hard → Unlock Soccer', width/2, 440);
+            }
+
+            function drawEndScreen(message) {
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(0, 0, width, height);
+                ctx.font = '40px sans-serif';
+                ctx.fillStyle = '#fff';
+                ctx.textAlign = 'center';
+                ctx.fillText(message, width/2, height/2);
+                ctx.font = '24px sans-serif';
+                ctx.fillText('Tap to return to menu', width/2, height/2 + 60);
+            }
+
+            // ---------- Menu click handling ----------
+            function handleMenuClick(mx, my) {
+                // Level buttons
+                const buttonY = 150, bw = 160, bh = 50;
+                for (let i = 0; i < 3; i++) {
+                    const bx = 250 + i * 200;
+                    if (mx >= bx && mx <= bx + bw && my >= buttonY && my <= buttonY + bh) {
+                        loadLevel(i);
+                        return;
+                    }
+                }
+
+                // Skin buttons
+                const skinY = 260, skinW = 130, skinH = 60;
+                for (let i = 0; i < 4; i++) {
+                    const sx = 120 + i * 160;
+                    if (mx >= sx && mx <= sx + skinW && my >= skinY && my <= skinY + skinH) {
+                        if (unlockedSkins[i]) {
+                            skinIndex = i;
+                        }
+                        return;
+                    }
+                }
+            }
+
+            // ---------- Game Loop ----------
+            let lastTime = performance.now();
+            function gameLoop(now) {
+                const delta = (now - lastTime) / 1000;  // seconds
+                lastTime = now;
+
+                if (gameState === 'menu') {
+                    // only draw menu, no update
+                } else if (gameState === 'playing') {
+                    update(delta);
+                } else if (gameState === 'levelComplete' || gameState === 'timeUp') {
+                    // wait for click to return to menu
+                    canvas.onclick = (e) => {
+                        if (gameState === 'levelComplete' || gameState === 'timeUp') {
+                            gameState = 'menu';
+                            canvas.onclick = defaultClickHandler;
+                        }
+                    };
+                    canvas.ontouchend = (e) => {
+                        if (gameState === 'levelComplete' || gameState === 'timeUp') {
+                            gameState = 'menu';
+                            canvas.ontouchend = defaultTouchHandler;
+                        }
+                    };
+                }
+
+                draw();
+                requestAnimationFrame(gameLoop);
+            }
+
+            function defaultClickHandler(e) {
+                if (gameState === 'menu') handleMenuClick(e.offsetX, e.offsetY);
+                else attemptFlip();
+            }
+            function defaultTouchHandler(e) {
+                e.preventDefault();
+                const rect = canvas.getBoundingClientRect();
+                const tx = e.touches[0].clientX - rect.left;
+                const ty = e.touches[0].clientY - rect.top;
+                if (gameState === 'menu') handleMenuClick(tx, ty);
+                else attemptFlip();
+            }
+            canvas.onclick = defaultClickHandler;
+            canvas.ontouchstart = defaultTouchHandler;
+
+            function draw() {
+                ctx.clearRect(0, 0, width, height);
+
+                if (gameState === 'menu') {
+                    drawMenu();
+                    return;
+                }
+
+                // Grid background
+                ctx.strokeStyle = '#333';
+                ctx.lineWidth = 0.5;
+                for (let i = 0; i < width; i += 50) {
+                    ctx.beginPath();
+                    ctx.moveTo(i, 0);
+                    ctx.lineTo(i, height);
+                    ctx.stroke();
+                }
+                for (let j = 0; j < height; j += 50) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, j);
+                    ctx.lineTo(width, j);
+                    ctx.stroke();
+                }
+
+                drawPlatforms();
+                drawObstacles();
+                drawFinishFlag();
+                drawBall();
+                drawTimer();
+                drawDeaths();
+
+                if (gameState === 'levelComplete') {
+                    drawEndScreen('Level Complete!');
+                } else if (gameState === 'timeUp') {
+                    drawEndScreen("Time's Up!");
+                }
+            }
+
+            // Start the loop
+            requestAnimationFrame(gameLoop);
+        })();
+    </script>
+</body>
+</html>
